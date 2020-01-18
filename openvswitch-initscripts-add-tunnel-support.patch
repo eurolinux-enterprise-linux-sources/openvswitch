@@ -1,0 +1,29 @@
+diff --git a/rhel/etc_sysconfig_network-scripts_ifdown-ovs b/rhel/etc_sysconfig_network-scripts_ifdown-ovs
+index 32fddb5..daa5786 100755
+--- a/rhel/etc_sysconfig_network-scripts_ifdown-ovs
++++ b/rhel/etc_sysconfig_network-scripts_ifdown-ovs
+@@ -51,7 +51,7 @@ case "$TYPE" in
+ 		retval=$?
+ 		ovs-vsctl -t ${TIMEOUT} -- --if-exists del-br "$DEVICE"
+ 		;;
+-	OVSPort|OVSIntPort|OVSBond)
++	OVSPort|OVSIntPort|OVSBond|OVSTunnel)
+ 		${OTHERSCRIPT} ${CONFIG} $2
+ 		retval=$?
+ 		ovs-vsctl -t ${TIMEOUT} -- --if-exists del-port "$OVS_BRIDGE" "$DEVICE"
+diff --git a/rhel/etc_sysconfig_network-scripts_ifup-ovs b/rhel/etc_sysconfig_network-scripts_ifup-ovs
+index 3c6b557..3f31c30 100755
+--- a/rhel/etc_sysconfig_network-scripts_ifup-ovs
++++ b/rhel/etc_sysconfig_network-scripts_ifup-ovs
+@@ -126,6 +126,11 @@ case "$TYPE" in
+ 		${OTHERSCRIPT} ${CONFIG} ${2}
+ 		OVSINTF=${DEVICE} /sbin/ifup "$OVS_BRIDGE"
+ 		;;
++	OVSTunnel)
++		ifup_ovs_bridge
++		ovs-vsctl -t ${TIMEOUT} -- --may-exist add-port "$OVS_BRIDGE" "$DEVICE" $OVS_OPTIONS -- set Interface "$DEVICE" type=$OVS_TUNNEL_TYPE $OVS_TUNNEL_OPTIONS ${OVS_EXTRA+-- $OVS_EXTRA}
++		${OTHERSCRIPT} ${CONFIG} ${2}
++		;;
+ 	*)
+ 		echo $"Invalid OVS interface type $TYPE"
+ 		exit 1

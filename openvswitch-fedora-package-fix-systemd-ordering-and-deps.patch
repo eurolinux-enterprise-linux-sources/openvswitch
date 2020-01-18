@@ -1,0 +1,205 @@
+From f32488ec28a05e26e0298b3e10b3a7fe422fbf88 Mon Sep 17 00:00:00 2001
+From: Flavio Leitner <fbl@redhat.com>
+Date: Thu, 9 Jan 2014 01:04:33 -0200
+Subject: [PATCH] fedora package: fix systemd ordering and deps.
+
+There is a chicken and egg issue where common OVS
+configuration uses a controller which is only accessible
+via the network. So starting OVS before network.target
+would break those configurations.
+
+However, the network doesn't come up after boot because
+OVS isn't started until after the network scripts tries
+to configure the ovs.
+
+This is partially fixed by commits:
+   commit: 602453000e28ec1076c0482ce13c284765a84409
+   rhel: Automatically start openvswitch service before bringing an ovs interfa
+
+   commit: 3214851c31538e8690e31f95702f8927a8c0838b
+   rhel: Add OVSREQUIRES to automatically bring up OpenFlow interface dependencies
+
+But still there is the dependency issue between network.target
+and openvswitch which this patch fixes it.  It provides two systemd
+service units. One to run at any time (openvswitch-nonetwork.service)
+which runs 'ovs-ctl start' and the other one (openvswith.service) to
+run after network.target which works as a frontend to the admin.
+
+The openvswitch-nonetwork.service is used internally by the
+'ifup-ovs/ifdown-ovs' scripts when adding or removing ports to
+the bridge or when the openvswitch.service is enabled by the admin.
+
+Signed-off-by: Flavio Leitner <fbl@redhat.com>
+Signed-off-by: Gurucharan Shetty <gshetty@nicira.com>
+---
+ rhel/automake.mk                                   |  4 +++-
+ rhel/etc_sysconfig_network-scripts_ifdown-ovs      | 11 ++++++++++-
+ rhel/etc_sysconfig_network-scripts_ifup-ovs        | 11 ++++++++++-
+ rhel/openvswitch-fedora.spec.in                    |  5 ++++-
+ ...ib_systemd_system_openvswitch-nonetwork.service | 13 ++++++++++++
+ rhel/usr_lib_systemd_system_openvswitch.service    |  7 ++++---
+ ..._openvswitch_scripts_systemd_sysconfig.template | 23 ++++++++++++++++++++++
+ 7 files changed, 67 insertions(+), 7 deletions(-)
+ create mode 100644 rhel/usr_lib_systemd_system_openvswitch-nonetwork.service
+ create mode 100644 rhel/usr_share_openvswitch_scripts_systemd_sysconfig.template
+
+diff --git a/rhel/automake.mk b/rhel/automake.mk
+index 2911e71..9cd9a41 100644
+--- a/rhel/automake.mk
++++ b/rhel/automake.mk
+@@ -22,7 +22,9 @@ EXTRA_DIST += \
+ 	rhel/openvswitch-fedora.spec \
+ 	rhel/openvswitch-fedora.spec.in \
+ 	rhel/usr_share_openvswitch_scripts_sysconfig.template \
+-	rhel/usr_lib_systemd_system_openvswitch.service
++	rhel/usr_share_openvswitch_scripts_systemd_sysconfig.template \
++	rhel/usr_lib_systemd_system_openvswitch.service \
++	rhel/usr_lib_systemd_system_openvswitch-nonetwork.service
+ 
+ update_rhel_spec = \
+   ($(ro_shell) && sed -e 's,[@]VERSION[@],$(VERSION),g') \
+diff --git a/rhel/etc_sysconfig_network-scripts_ifdown-ovs b/rhel/etc_sysconfig_network-scripts_ifdown-ovs
+index d2a2f4b..32fddb5 100755
+--- a/rhel/etc_sysconfig_network-scripts_ifdown-ovs
++++ b/rhel/etc_sysconfig_network-scripts_ifdown-ovs
+@@ -34,7 +34,16 @@ if [ ! -x ${OTHERSCRIPT} ]; then
+     OTHERSCRIPT="/etc/sysconfig/network-scripts/ifdown-eth"
+ fi
+ 
+-[ -f /var/lock/subsys/openvswitch ] || /sbin/service openvswitch start
++SERVICE_UNIT=/usr/lib/systemd/system/openvswitch-nonetwork.service
++if [ -f $SERVICE_UNIT ] && [ -x /usr/bin/systemctl ]; then
++	if ! systemctl --quiet is-active openvswitch-nonetwork.service; then
++		systemctl start openvswitch-nonetwork.service
++	fi
++else
++	if [ ! -f /var/lock/subsys/openvswitch ]; then
++		/sbin/service openvswitch start
++	fi
++fi
+ 
+ case "$TYPE" in
+ 	OVSBridge)
+diff --git a/rhel/etc_sysconfig_network-scripts_ifup-ovs b/rhel/etc_sysconfig_network-scripts_ifup-ovs
+index 8904c59..3c6b557 100755
+--- a/rhel/etc_sysconfig_network-scripts_ifup-ovs
++++ b/rhel/etc_sysconfig_network-scripts_ifup-ovs
+@@ -60,7 +60,16 @@ fi
+ 	fi
+ done
+ 
+-[ -f /var/lock/subsys/openvswitch ] || /sbin/service openvswitch start
++SERVICE_UNIT=/usr/lib/systemd/system/openvswitch-nonetwork.service
++if [ -f $SERVICE_UNIT ] && [ -x /usr/bin/systemctl ]; then
++	if ! systemctl --quiet is-active openvswitch-nonetwork.service; then
++		systemctl start openvswitch-nonetwork.service
++	fi
++else
++	if [ ! -f /var/lock/subsys/openvswitch ]; then
++		/sbin/service openvswitch start
++	fi
++fi
+ 
+ case "$TYPE" in
+ 	OVSBridge)
+diff --git a/rhel/openvswitch-fedora.spec.in b/rhel/openvswitch-fedora.spec.in
+index 27a3b03..8a5505d 100644
+--- a/rhel/openvswitch-fedora.spec.in
++++ b/rhel/openvswitch-fedora.spec.in
+@@ -45,6 +45,8 @@ install -d -m 755 $RPM_BUILD_ROOT/etc
+ install -d -m 755 $RPM_BUILD_ROOT/etc/openvswitch
+ install -p -D -m 0644 rhel/usr_lib_systemd_system_openvswitch.service \
+         $RPM_BUILD_ROOT%{_unitdir}/openvswitch.service
++install -p -D -m 0644 rhel/usr_lib_systemd_system_openvswitch-nonetwork.service \
++        $RPM_BUILD_ROOT%{_unitdir}/openvswitch-nonetwork.service
+ install -m 755 rhel/etc_init.d_openvswitch \
+         $RPM_BUILD_ROOT%{_datadir}/openvswitch/scripts/openvswitch.init
+ install -d -m 755 $RPM_BUILD_ROOT/etc/sysconfig
+@@ -60,7 +62,7 @@ install -p -m 0755 rhel/etc_sysconfig_network-scripts_ifdown-ovs \
+         $RPM_BUILD_ROOT/etc/sysconfig/network-scripts/ifdown-ovs
+ install -p -m 0755 rhel/etc_sysconfig_network-scripts_ifup-ovs \
+         $RPM_BUILD_ROOT/etc/sysconfig/network-scripts/ifup-ovs
+-install -p -D -m 0644 rhel/usr_share_openvswitch_scripts_sysconfig.template \
++install -p -D -m 0644 rhel/usr_share_openvswitch_scripts_systemd_sysconfig.template \
+         $RPM_BUILD_ROOT/etc/sysconfig/openvswitch
+ install -d -m 755 $RPM_BUILD_ROOT/usr/share/openvswitch/scripts
+ 
+@@ -101,6 +103,7 @@ systemctl start openvswitch.service
+ %config /etc/sysconfig/openvswitch
+ %config /etc/logrotate.d/openvswitch
+ %{_unitdir}/openvswitch.service
++%{_unitdir}/openvswitch-nonetwork.service
+ %{_datadir}/openvswitch/scripts/openvswitch.init
+ %{_sysconfdir}/sysconfig/network-scripts/ifup-ovs
+ %{_sysconfdir}/sysconfig/network-scripts/ifdown-ovs
+diff --git a/rhel/usr_lib_systemd_system_openvswitch-nonetwork.service b/rhel/usr_lib_systemd_system_openvswitch-nonetwork.service
+new file mode 100644
+index 0000000..870b25e
+--- /dev/null
++++ b/rhel/usr_lib_systemd_system_openvswitch-nonetwork.service
+@@ -0,0 +1,13 @@
++[Unit]
++Description=Open vSwitch Internal Unit
++After=syslog.target
++PartOf=openvswitch.service
++Wants=openvswitch.service
++
++[Service]
++Type=oneshot
++RemainAfterExit=yes
++EnvironmentFile=-/etc/sysconfig/openvswitch
++ExecStart=/usr/share/openvswitch/scripts/ovs-ctl start \
++          --system-id=random $OPTIONS
++ExecStop=/usr/share/openvswitch/scripts/ovs-ctl stop
+diff --git a/rhel/usr_lib_systemd_system_openvswitch.service b/rhel/usr_lib_systemd_system_openvswitch.service
+index f39d7e6..f0bc16f 100644
+--- a/rhel/usr_lib_systemd_system_openvswitch.service
++++ b/rhel/usr_lib_systemd_system_openvswitch.service
+@@ -1,11 +1,12 @@
+ [Unit]
+ Description=Open vSwitch
+-After=syslog.target network.target
++After=syslog.target network.target openvswitch-nonetwork.service
++Requires=openvswitch-nonetwork.service
+ 
+ [Service]
+ Type=oneshot
+-ExecStart=/usr/share/openvswitch/scripts/openvswitch.init start
+-ExecStop=/usr/share/openvswitch/scripts/openvswitch.init stop
++ExecStart=/bin/true
++ExecStop=/bin/true
+ RemainAfterExit=yes
+ 
+ [Install]
+diff --git a/rhel/usr_share_openvswitch_scripts_systemd_sysconfig.template b/rhel/usr_share_openvswitch_scripts_systemd_sysconfig.template
+new file mode 100644
+index 0000000..3050a07
+--- /dev/null
++++ b/rhel/usr_share_openvswitch_scripts_systemd_sysconfig.template
+@@ -0,0 +1,23 @@
++### Configuration options for openvswitch
++#
++# Enable core files:
++# --force-corefiles=yes
++#
++# Set "nice" priority at which to run ovsdb-server:
++# --ovsdb-server-priority=-10
++#
++# Set "nice" priority at which to run ovsdb-vswitchd:
++# --ovs-vswitchd-priority=-10
++#
++# Pass or not --mlockall option to ovs-vswitchd.
++# This option should be set to "yes" or "no".  The default is "yes".
++# Enabling this option can avoid networking interruptions due to
++# system memory pressure in extraordinary situations, such as multiple
++# concurrent VM import operations.
++# --mlockall=yes
++#
++# Use valgrind:
++#   --ovs-vswitchd-wrapper=valgrind
++#   --ovsdb-server-wrapper=valgrind
++#
++OPTIONS=""
+-- 
+1.8.4.2
+

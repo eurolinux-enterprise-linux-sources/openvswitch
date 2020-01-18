@@ -1,0 +1,90 @@
+From 490db96efaf89c63656b192d5ca287b0908a6c77 Mon Sep 17 00:00:00 2001
+From: Flavio Leitner <fbl@redhat.com>
+Date: Tue, 14 Jan 2014 00:22:07 -0200
+Subject: [PATCH] rhel: Enable DHCP support for internal ports.
+
+The current initscripts ifup-ovs brings up internal ports as
+an ordinary ethernet device, so BOOTPROTO=dhcp|none does not
+consider any OVS/bridge detail.
+
+Since DHCP requires a port in the bridge to reach the server,
+bring up the required port before in the same way it does for
+OVS bridge.
+
+Signed-off-by: Flavio Leitner <fbl@redhat.com>
+Signed-off-by: Gurucharan Shetty <gshetty@nicira.com>
+---
+ rhel/README.RHEL                            | 38 +++++++++++++++++++++++++++++
+ rhel/etc_sysconfig_network-scripts_ifup-ovs |  7 +++++-
+ 2 files changed, 44 insertions(+), 1 deletion(-)
+
+diff --git a/rhel/README.RHEL b/rhel/README.RHEL
+index 435772f..cb6ab88 100644
+--- a/rhel/README.RHEL
++++ b/rhel/README.RHEL
+@@ -87,6 +87,44 @@ OVSBOOTPROTO="dhcp"
+ OVSDHCPINTERFACES="eth0"
+ HOTPLUG=no
+ 
++
++Adding Internal Port to ovsbridge0:
++
++==> ifcfg-intbr0 <==
++DEVICE=intbr0
++ONBOOT=yes
++DEVICETYPE=ovs
++TYPE=OVSIntPort
++OVS_BRIDGE=ovsbridge0
++HOTPLUG=no
++
++
++Internal Port with fixed IP address:
++
++DEVICE=intbr0
++ONBOOT=yes
++DEVICETYPE=ovs
++TYPE=OVSIntPort
++OVS_BRIDGE=ovsbridge0
++BOOTPROTO=static
++IPADDR=A.B.C.D
++NETMASK=X.Y.Z.0
++HOTPLUG=no
++
++Internal Port with DHCP:
++* Needs OVSBOOTPROTO or BOOTPROTO.
++* All the interfaces that can reach the DHCP server
++as a space separated list in OVSDHCPINTERFACES.
++
++DEVICE=intbr0
++ONBOOT=yes
++DEVICETYPE=ovs
++TYPE=OVSIntPort
++OVS_BRIDGE=ovsbridge0
++OVSBOOTPROTO="dhcp"
++OVSDHCPINTERFACES="eth0"
++HOTPLUG=no
++
+ Adding physical eth0 to ovsbridge0 described above:
+ 
+ ==> ifcfg-eth0 <==
+diff --git a/rhel/etc_sysconfig_network-scripts_ifup-ovs b/rhel/etc_sysconfig_network-scripts_ifup-ovs
+index 3f31c30..0ee7b21 100755
+--- a/rhel/etc_sysconfig_network-scripts_ifup-ovs
++++ b/rhel/etc_sysconfig_network-scripts_ifup-ovs
+@@ -115,7 +115,12 @@ case "$TYPE" in
+ 	OVSIntPort)
+ 		ifup_ovs_bridge
+ 		ovs-vsctl -t ${TIMEOUT} -- --may-exist add-port "$OVS_BRIDGE" "$DEVICE" $OVS_OPTIONS -- set Interface "$DEVICE" type=internal ${OVS_EXTRA+-- $OVS_EXTRA}
+-		${OTHERSCRIPT} ${CONFIG} ${2}
++		if [ -n "${OVSDHCPINTERFACES}" ]; then
++			for _iface in ${OVSDHCPINTERFACES}; do
++				/sbin/ifup ${_iface}
++			done
++		fi
++		BOOTPROTO="${OVSBOOTPROTO}" ${OTHERSCRIPT} ${CONFIG} ${2}
+ 		;;
+ 	OVSBond)
+ 		ifup_ovs_bridge
+-- 
+1.8.4.2
+

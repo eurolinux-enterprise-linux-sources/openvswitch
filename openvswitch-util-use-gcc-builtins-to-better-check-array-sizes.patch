@@ -1,0 +1,62 @@
+From b86fec9baa9c2ee03b28cfc8dad95c41bf9acaad Mon Sep 17 00:00:00 2001
+From: Flavio Leitner <fbl@redhat.com>
+Date: Wed, 2 Oct 2013 02:40:09 -0300
+Subject: [PATCH] util: use gcc builtins to better check array sizes
+
+GCC provides two useful builtin functions that can help
+to improve array size checking during compilation.
+
+This patch contains no functional changes, but it makes
+it easier to detect mistakes.
+
+Signed-off-by: Flavio Leitner <fbl@redhat.com>
+Signed-off-by: Ben Pfaff <blp@nicira.com>
+---
+ AUTHORS    |  1 +
+ lib/util.h | 17 ++++++++++++++++-
+ 2 files changed, 17 insertions(+), 1 deletion(-)
+
+diff --git a/AUTHORS b/AUTHORS
+index af34bfe..7a919a2 100644
+--- a/AUTHORS
++++ b/AUTHORS
+@@ -32,6 +32,7 @@ Duffie Cooley           dcooley@nicira.com
+ Ed Maste                emaste at freebsd.org
+ Edward Tomasz Napierała trasz@freebsd.org
+ Ethan Jackson           ethan@nicira.com
++Flavio Leitner          fbl@redhat.com
+ FUJITA Tomonori         fujita.tomonori@lab.ntt.co.jp
+ Gaetano Catalli         gaetano.catalli@gmail.com
+ Giuseppe Lettieri       g.lettieri@iet.unipi.it
+diff --git a/lib/util.h b/lib/util.h
+index 0db41be..a899065 100644
+--- a/lib/util.h
++++ b/lib/util.h
+@@ -87,8 +87,23 @@ void ovs_assert_failure(const char *, const char *, const char *) NO_RETURN;
+ 
+ extern const char *program_name;
+ 
++#define __ARRAY_SIZE_NOCHECK(ARRAY) (sizeof(ARRAY) / sizeof((ARRAY)[0]))
++#ifdef __GNUC__
++/* return 0 for array types, 1 otherwise */
++#define __ARRAY_CHECK(ARRAY) 					\
++    !__builtin_types_compatible_p(typeof(ARRAY), typeof(&ARRAY[0]))
++
++/* compile-time fail if not array */
++#define __ARRAY_FAIL(ARRAY) (sizeof(char[-2*!__ARRAY_CHECK(ARRAY)]))
++#define __ARRAY_SIZE(ARRAY)					\
++    __builtin_choose_expr(__ARRAY_CHECK(ARRAY),			\
++        __ARRAY_SIZE_NOCHECK(ARRAY), __ARRAY_FAIL(ARRAY))
++#else
++#define __ARRAY_SIZE(ARRAY) __ARRAY_SIZE_NOCHECK(ARRAY)
++#endif
++
+ /* Returns the number of elements in ARRAY. */
+-#define ARRAY_SIZE(ARRAY) (sizeof ARRAY / sizeof *ARRAY)
++#define ARRAY_SIZE(ARRAY) __ARRAY_SIZE(ARRAY)
+ 
+ /* Returns X / Y, rounding up.  X must be nonnegative to round correctly. */
+ #define DIV_ROUND_UP(X, Y) (((X) + ((Y) - 1)) / (Y))
+-- 
+1.8.4.2
+
